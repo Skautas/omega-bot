@@ -11,19 +11,22 @@ from telegram import Bot
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
-exchange = ccxt.binance()
+
+# ✅ Naudokime Kraken – prieinamas be raktų daugelyje regionų
+exchange = ccxt.kraken()
+
 TIMEFRAME = "15m"
 
-# === Turtai ===
+# === Turtai (Kraken simboliai) ===
 ASSETS = {
-    "BTC": "BTC/USDT",
-    "ETH": "ETH/USDT",
-    "SOL": "SOL/USDT",
-    "XRP": "XRP/USDT",
-    "ZEC": "ZEC/USDT"
+    "BTC": "BTC/USD",
+    "ETH": "ETH/USD",
+    "SOL": "SOL/USD",
+    "XRP": "XRP/USD",
+    "ZEC": "ZEC/USD"
 }
 
-# === ATR funkcija (slankus stop-loss) ===
+# === ATR funkcija ===
 def calculate_atr(high, low, close, period=14):
     hl = high - low
     hc = abs(high - close.shift(1))
@@ -31,7 +34,7 @@ def calculate_atr(high, low, close, period=14):
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-# === Pagrindinės funkcijos (Fib, S/R, tūris) ===
+# === Fib, S/R, signalo logika ===
 def calculate_fib_levels(high: float, low: float) -> dict:
     diff = high - low
     return {
@@ -74,7 +77,6 @@ def calculate_signal(symbol: str) -> tuple:
         avg_volume = df["volume"].rolling(20).mean().iloc[-1]
         high_volume = current_volume > avg_volume * 1.5
 
-        # EMA
         ema9 = EMAIndicator(closes, window=9).ema_indicator()
         ema21 = EMAIndicator(closes, window=21).ema_indicator()
         ema_cross_up = ema9.iloc[-2] <= ema21.iloc[-2] and ema9.iloc[-1] > ema21.iloc[-1]
@@ -83,7 +85,6 @@ def calculate_signal(symbol: str) -> tuple:
         if not (ema_cross_up or ema_cross_down):
             return "hold", 0.0, 0, 0, 0
 
-        # Fib ir S/R
         recent_high = closes[-50:].max()
         recent_low = closes[-50:].min()
         fib = calculate_fib_levels(recent_high, recent_low)
@@ -93,13 +94,11 @@ def calculate_signal(symbol: str) -> tuple:
         near_fib_sell = is_near_level(current_price, [fib["0.236"], fib["0.382"]])
         near_sr = is_near_level(current_price, sr_levels)
 
-        # Žvakės kokybė
         body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
         wick_up = df["high"].iloc[-1] - max(df["close"].iloc[-1], df["open"].iloc[-1])
         wick_down = min(df["close"].iloc[-1], df["open"].iloc[-1]) - df["low"].iloc[-1]
         clean_candle = (wick_up < 0.4 * body) and (wick_down < 0.4 * body)
 
-        # Tikimybė
         score = 0
         if high_volume: score += 25
         if near_sr: score += 25
@@ -107,14 +106,12 @@ def calculate_signal(symbol: str) -> tuple:
         if clean_candle: score += 20
         confidence = min(score / 100.0, 1.0)
 
-        # ATR (dinaminis SL)
         atr_val = calculate_atr(df["high"], df["low"], df["close"], 14).iloc[-1]
-        atr_dist = atr_val * 1.2  # truputį plečiame
+        atr_dist = atr_val * 1.2
 
-        # Nustatome signalą + TP/SL
         if ema_cross_up and near_fib_buy and confidence >= 0.75:
             sl = min(fib["0.786"], recent_low * 0.995)
-            tp = current_price + (current_price - sl) * 1.8  # RR ~1.8
+            tp = current_price + (current_price - sl) * 1.8
             return "BUY", confidence, current_price, tp, sl
 
         elif ema_cross_down and near_fib_sell and confidence >= 0.75:
@@ -129,28 +126,28 @@ def calculate_signal(symbol: str) -> tuple:
         print(f"Klaida {symbol}: {e}")
         return "hold", 0.0, 0, 0, 0
 
-# === Siunčiam signalą su TP/SL ===
+# === Siuntimas į Telegram ===
 async def send_signal(name: str, signal: str, price: float, tp: float, sl: float, confidence: float):
     if not bot:
         return
     try:
-        rr = round(abs(tp - price) / abs(price - sl), 1) if sl != price else 0
+        rr = round(abs(tp - price) / abs(price - sl), 1)
         emoji = "🟢" if signal == "BUY" else "🔴"
         msg = (
             f"{emoji} **{signal} SIGNAL (15m)**\n"
             f"🪙 {name}\n"
-            f"💰 Įėjimas: {price:.4f} USDT\n"
-            f"🎯 TP: {tp:.4f} USDT\n"
-            f"🛑 SL: {sl:.4f} USDT\n"
+            f"💰 Įėjimas: {price:.4f} USD\n"
+            f"🎯 TP: {tp:.4f} USD\n"
+            f"🛑 SL: {sl:.4f} USD\n"
             f"📊 RR: {rr} | Tikimybė: {confidence:.1%}\n"
-            f"🔍 Pagrindas: Fib + S/R + Tūris + EMA"
+            f"🔍 Patvirtinimas: Fib + S/R + Tūris + EMA"
         )
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-        print(f"✅ Signalas: {name} {signal} @ {price:.4f} | TP: {tp:.4f} | SL: {sl:.4f} | RR: {rr}")
+        print(f"✅ Signalas: {name} {signal} @ {price:.4f} | TP: {tp:.4f} | SL: {sl:.4f}")
     except Exception as e:
         print(f"❌ Telegram klaida: {e}")
 
-# === Tikriname visus turtus ===
+# === Pagrindinis ciklas ===
 async def check_all_signals():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for name, pair in ASSETS.items():
@@ -159,9 +156,8 @@ async def check_all_signals():
             await send_signal(name, signal, price, tp, sl, conf)
         time.sleep(1)
 
-# === Pagrindinis ciklas ===
 async def main_loop():
-    print("🚀 OMEGA 15m Signal Botas su TP/SL paleistas!")
+    print("🚀 OMEGA 15m Signal Botas (Kraken) su TP/SL paleistas!")
     while True:
         try:
             await check_all_signals()
@@ -171,7 +167,7 @@ async def main_loop():
             print("\n🛑 Sustabdyta.")
             break
         except Exception as e:
-            print(f"⚠️ Klaida cikle: {e}")
+            print(f"⚠️ Klaida: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":
