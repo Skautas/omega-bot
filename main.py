@@ -4,20 +4,22 @@ import ccxt
 import pandas as pd
 import numpy as np
 import time
+import threading
+import requests
 from ta.trend import EMAIndicator
 from telegram import Bot
 
-# === Konfigūracija ===
+# === TELEGRAM KONFIGŪRACIJA ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# ✅ Naudokime Kraken – prieinamas be raktų daugelyje regionų
+# === KRaken (viešas API – nereikia rakto) ===
 exchange = ccxt.kraken()
 
 TIMEFRAME = "15m"
 
-# === Turtai (Kraken simboliai) ===
+# === TURTŲ SĄRAŠAS ===
 ASSETS = {
     "BTC": "BTC/USD",
     "ETH": "ETH/USD",
@@ -26,7 +28,7 @@ ASSETS = {
     "ZEC": "ZEC/USD"
 }
 
-# === ATR funkcija ===
+# === FUNKCIJA: ATR (dinaminis stop-loss) ===
 def calculate_atr(high, low, close, period=14):
     hl = high - low
     hc = abs(high - close.shift(1))
@@ -34,7 +36,7 @@ def calculate_atr(high, low, close, period=14):
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-# === Fib, S/R, signalo logika ===
+# === FUNKCIJA: Fibonacci lygiai ===
 def calculate_fib_levels(high: float, low: float) -> dict:
     diff = high - low
     return {
@@ -47,6 +49,7 @@ def calculate_fib_levels(high: float, low: float) -> dict:
         "1.0": low,
     }
 
+# === FUNKCIJA: S/R lygiai ===
 def detect_sr_levels(prices: list, window: int = 5) -> list:
     levels = []
     for i in range(window, len(prices) - window):
@@ -64,6 +67,7 @@ def detect_sr_levels(prices: list, window: int = 5) -> list:
 def is_near_level(price: float, levels: list, tolerance: float = 0.003) -> bool:
     return any(abs(price - lvl) / lvl <= tolerance for lvl in levels)
 
+# === FUNKCIJA: Signalų skaičiavimas ===
 def calculate_signal(symbol: str) -> tuple:
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=200)
@@ -107,7 +111,6 @@ def calculate_signal(symbol: str) -> tuple:
         confidence = min(score / 100.0, 1.0)
 
         atr_val = calculate_atr(df["high"], df["low"], df["close"], 14).iloc[-1]
-        atr_dist = atr_val * 1.2
 
         if ema_cross_up and near_fib_buy and confidence >= 0.75:
             sl = min(fib["0.786"], recent_low * 0.995)
@@ -126,7 +129,7 @@ def calculate_signal(symbol: str) -> tuple:
         print(f"Klaida {symbol}: {e}")
         return "hold", 0.0, 0, 0, 0
 
-# === Siuntimas į Telegram ===
+# === FUNKCIJA: Siuntimas į Telegram ===
 async def send_signal(name: str, signal: str, price: float, tp: float, sl: float, confidence: float):
     if not bot:
         return
@@ -147,7 +150,20 @@ async def send_signal(name: str, signal: str, price: float, tp: float, sl: float
     except Exception as e:
         print(f"❌ Telegram klaida: {e}")
 
-# === Pagrindinis ciklas ===
+# === SELF-PING FUNKCIJA (neleidžia Colab užmigti) ===
+def keep_colab_alive():
+    """Siunčia užklausą į Colab kas 5 min, kad sesija išliktų aktyvi."""
+    while True:
+        try:
+            requests.get("https://colab.research.google.com/")
+        except:
+            pass
+        time.sleep(300)  # kas 5 min
+
+# Paleidžiam self-ping giją
+threading.Thread(target=keep_colab_alive, daemon=True).start()
+
+# === PAGRINDINIS CIKLAS ===
 async def check_all_signals():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for name, pair in ASSETS.items():
@@ -157,7 +173,7 @@ async def check_all_signals():
         time.sleep(1)
 
 async def main_loop():
-    print("🚀 OMEGA 15m Signal Botas (Kraken) su TP/SL paleistas!")
+    print("🚀 OMEGA 15m Signal Botas (Kraken + TP/SL) paleistas!")
     while True:
         try:
             await check_all_signals()
@@ -170,5 +186,6 @@ async def main_loop():
             print(f"⚠️ Klaida: {e}")
             time.sleep(60)
 
+# === PAGALBINE FUNKCIJA ===
 if __name__ == "__main__":
     asyncio.run(main_loop())
