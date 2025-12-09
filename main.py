@@ -19,13 +19,18 @@ exchange = ccxt.kraken()
 
 TIMEFRAME = "15m"
 
-# === TURTŲ SĄRAŠAS ===
+# === TURTŲ SĄRAŠAS – įskaitant ARB, MATIC, ADA, XLM ===
 ASSETS = {
     "BTC": "BTC/USD",
     "ETH": "ETH/USD",
     "SOL": "SOL/USD",
     "XRP": "XRP/USD",
-    "ZEC": "ZEC/USD"
+    "ZEC": "ZEC/USD",
+    "ICP": "ICP/USD",
+    "ARB": "ARB/USD",
+    "MATIC": "MATIC/USD",
+    "ADA": "ADA/USD",
+    "XLM": "XLM/USD"
 }
 
 # === ATR FUNKCIJA ===
@@ -67,7 +72,7 @@ def detect_sr_levels(prices: list, window: int = 5) -> list:
 def is_near_level(price: float, levels: list, tolerance: float = 0.003) -> bool:
     return any(abs(price - lvl) / lvl <= tolerance for lvl in levels)
 
-# === SIGNALŲ SKAIČIAVIMO FUNKCIJA (su priverstiniu režimu) ===
+# === SIGNALŲ SKAIČIAVIMO FUNKCIJA ===
 def calculate_signal(symbol: str, force_mode=False) -> tuple:
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=200)
@@ -153,18 +158,18 @@ async def send_signal(name: str, signal: str, price: float, tp: float, sl: float
     except Exception as e:
         print(f"❌ Telegram klaida: {e}")
 
-# === SELF-PING FUNKCIJA (neleidžia Colab užmigti) ===
+# === SELF-PING FUNKCIJA ===
 def keep_colab_alive():
     while True:
         try:
             requests.get("https://colab.research.google.com/")
         except:
             pass
-        time.sleep(300)  # kas 5 min
+        time.sleep(300)
 
 threading.Thread(target=keep_colab_alive, daemon=True).start()
 
-# === PAGRINDINIS CIKLAS SU PRIVERSTINIU SIGNALU ===
+# === PAGRINDINIS CIKLAS ===
 last_forced_signal_time = None
 
 async def check_all_signals():
@@ -172,14 +177,12 @@ async def check_all_signals():
     now = pd.Timestamp.now()
     print(f"\n🕒 Tikrinama: {now}")
 
-    # 1. Bandome rasti įprastą signalą (≥75%)
     for name, pair in ASSETS.items():
         signal, conf, price, tp, sl = calculate_signal(pair, force_mode=False)
         if signal != "hold":
             await send_signal(name, signal, price, tp, sl, conf)
             return
 
-    # 2. Jei įprastų nėra – tikriname, ar laikas priverstiniam (kas 15 min)
     if last_forced_signal_time is None or (now - last_forced_signal_time).total_seconds() >= 900:
         print("🔍 Priverstinis signalo paieška (≥60%)...")
         for name, pair in ASSETS.items():
@@ -190,7 +193,7 @@ async def check_all_signals():
                 return
 
 async def main_loop():
-    print("🚀 OMEGA 15m Signal Botas su priverstiniais signalais paleistas!")
+    print("🚀 OMEGA Botas su ARB, MATIC, ADA, XLM paleistas!")
     while True:
         try:
             await check_all_signals()
