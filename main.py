@@ -1,20 +1,3 @@
-# TAI PALEISKITE TIESIOGIAI COLAB LANGELYJE
-import asyncio
-from telegram import Bot
-
-TELEGRAM_TOKEN = "8357750072:AAEImtZV_PkrsMpaZyimyb00RY-zFQLNrUY"
-CHAT_ID = "5810819607"
-
-bot = Bot(token=TELEGRAM_TOKEN)
-
-async def send_test():
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text="✅ Colab testas sėkmingas!")
-        print("✅ Testas išsiųstas!")
-    except Exception as e:
-        print(f"❌ Klaida: {e}")
-
-await send_test()
 import os
 import asyncio
 import ccxt
@@ -287,6 +270,30 @@ async def main_loop():
             time.sleep(60)
 
 # === TESTINIS PRANEŠIMAS ===
+async def send_test_message():
+    if bot:
+        test_msg = (
+            "🧪 **TESTAS: Jūsų OMEGA botas veikia!**\n"
+            "✅ Ryšys su Telegram – sėkmingas\n"
+            "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
+            "📊 Stebimi turtai: BTC, ETH, SOL, XRP, ZEC, ICP"
+        )
+        try:
+            await bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
+            print("✅ Testinis pranešimas išsiųstas į Telegram!")
+        except Exception as e:
+            print(f"❌ Klaida siunčiant testą: {e}")
+    else:
+        print("❌ Telegram botas neįjungtas (patikrinkite raktus)")
+
+# === PALEIDŽIAME ===
+if __name__ == "__main__":
+    # Siunčiam testinį pranešimą iš karto
+    asyncio.run(send_test_message())
+    
+    # Paleidžiam pagrindinį ciklą
+    asyncio.run(main_loop())
+    # === TESTINIS PRANEŠIMAS ===
 async def send_test_message():
     if bot:
         test_msg = (
