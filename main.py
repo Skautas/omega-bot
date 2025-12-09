@@ -19,14 +19,14 @@ exchange = ccxt.kraken()
 
 TIMEFRAME = "15m"
 
-# === TURTŲ SĄRAŠAS – įskaitant ARB, MATIC, ADA, XLM ===
+# === TURTŲ SĄRAŠAS – tik Kraken palaikomi ===
 ASSETS = {
     "BTC": "BTC/USD",
     "ETH": "ETH/USD",
     "SOL": "SOL/USD",
     "XRP": "XRP/USD",
     "ZEC": "ZEC/USD",
-    "ICP": "ICP/USD",
+    "ICP": "ICP/USD"
 }
 
 # === ATR FUNKCIJA ===
@@ -68,6 +68,58 @@ def detect_sr_levels(prices: list, window: int = 5) -> list:
 def is_near_level(price: float, levels: list, tolerance: float = 0.003) -> bool:
     return any(abs(price - lvl) / lvl <= tolerance for lvl in levels)
 
+# === LIQUIDITY ZONOS ===
+def detect_liquidity_zones(ohlcv, lookback=100):
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["body"] = abs(df["close"] - df["open"])
+    df["range"] = df["high"] - df["low"]
+    volume_threshold = df["volume"].quantile(0.8)
+    liquidity_pools = df[(df["volume"] > volume_threshold) & (df["body"] > df["range"] * 0.6)]
+    low_volume = df["volume"] < df["volume"].rolling(20).mean() * 0.5
+    voids = df[low_volume & (df["range"] > df["range"].rolling(10).mean() * 1.5)]
+    return liquidity_pools[["low", "high"]].values, voids[["low", "high"]].values
+
+# === ORDER BLOCKS ===
+def detect_true_order_blocks(ohlcv, window=3):
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    ob_blocks = []
+    for i in range(window, len(df) - window):
+        candle = df.iloc[i]
+        next_candles = df.iloc[i+1:i+window+1]
+        # Bullish OB: bearish žvakė, po kurios kyla
+        if candle["close"] < candle["open"]:
+            if next_candles["close"].min() > candle["low"]:
+                ob_blocks.append(("bull", candle["low"], candle["high"]))
+        # Bearish OB: bullish žvakė, po kurios krenta
+        elif candle["close"] > candle["open"]:
+            if next_candles["close"].max() < candle["high"]:
+                ob_blocks.append(("bear", candle["low"], candle["high"]))
+    return ob_blocks
+
+# === MARKET STRUCTURE SHIFT ===
+def detect_mss(closes, lookback=20):
+    recent = closes[-lookback:]
+    highs = pd.Series(recent).rolling(3).max().dropna()
+    lows = pd.Series(recent).rolling(3).min().dropna()
+    if highs.iloc[-1] > highs.iloc[-3] and lows.iloc[-1] > lows.iloc[-3]:
+        return "bullish"
+    elif highs.iloc[-1] < highs.iloc[-3] and lows.iloc[-1] < lows.iloc[-3]:
+        return "bearish"
+    return "neutral"
+
+# === POC (Point of Control) ===
+def calculate_poc(ohlcv, levels=50):
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    price_range = np.linspace(df["low"].min(), df["high"].max(), levels)
+    volume_profile = []
+    for i in range(len(price_range) - 1):
+        low_p = price_range[i]
+        high_p = price_range[i + 1]
+        vol = df[(df["high"] >= low_p) & (df["low"] <= high_p)]["volume"].sum()
+        volume_profile.append((low_p, high_p, vol))
+    poc = max(volume_profile, key=lambda x: x[2])
+    return (poc[0] + poc[1]) / 2
+
 # === SIGNALŲ SKAIČIAVIMO FUNKCIJA ===
 def calculate_signal(symbol: str, force_mode=False) -> tuple:
     try:
@@ -94,10 +146,19 @@ def calculate_signal(symbol: str, force_mode=False) -> tuple:
         recent_low = closes[-50:].min()
         fib = calculate_fib_levels(recent_high, recent_low)
         sr_levels = detect_sr_levels(closes.tolist(), window=5)
+        liquidity_pools, liquidity_voids = detect_liquidity_zones(ohlcv, 50)
+        ob_blocks = detect_true_order_blocks(ohlcv, 3)
+        mss = detect_mss(closes, 20)
+        poc = calculate_poc(ohlcv, 50)
 
         near_fib_buy = is_near_level(current_price, [fib["0.618"], fib["0.786"]])
         near_fib_sell = is_near_level(current_price, [fib["0.236"], fib["0.382"]])
         near_sr = is_near_level(current_price, sr_levels)
+        near_liquidity_pool = any(abs(current_price - lvl) / lvl <= 0.005 for lvl in liquidity_pools.flatten())
+        near_liquidity_void = any(abs(current_price - lvl) / lvl <= 0.005 for lvl in liquidity_voids.flatten())
+        near_ob_bull = any(block[0] == "bull" and block[1] <= current_price <= block[2] for block in ob_blocks)
+        near_ob_bear = any(block[0] == "bear" and block[1] <= current_price <= block[2] for block in ob_blocks)
+        near_poc = abs(current_price - poc) / poc <= 0.005
 
         body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
         wick_up = df["high"].iloc[-1] - max(df["close"].iloc[-1], df["open"].iloc[-1])
@@ -109,6 +170,12 @@ def calculate_signal(symbol: str, force_mode=False) -> tuple:
         if near_sr: score += (20 if force_mode else 25)
         if near_fib_buy or near_fib_sell: score += 30
         if clean_candle: score += (15 if force_mode else 20)
+        if near_liquidity_pool: score += 15
+        if near_ob_bull or near_ob_bear: score += 15
+        if mss == "bullish" and ema_cross_up: score += 10
+        if mss == "bearish" and ema_cross_down: score += 10
+        if near_poc: score += 10
+
         confidence = min(score / 100.0, 1.0)
 
         threshold = 0.60 if force_mode else 0.75
@@ -147,7 +214,7 @@ async def send_signal(name: str, signal: str, price: float, tp: float, sl: float
             f"🎯 TP: {tp:.4f} USD\n"
             f"🛑 SL: {sl:.4f} USD\n"
             f"📊 RR: {rr} | Tikimybė: {confidence:.1%}\n"
-            f"🔍 Patvirtinimas: Fib + S/R + Tūris + EMA"
+            f"🔍 Patvirtinimas: Fib + S/R + Tūris + EMA + Liquidity + OB + MSS"
         )
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         print(f"✅ Signalas: {name} {signal} @ {price:.4f} | TP: {tp:.4f} | SL: {sl:.4f}")
@@ -189,7 +256,7 @@ async def check_all_signals():
                 return
 
 async def main_loop():
-    print("🚀 OMEGA Botas su ARB, MATIC, ADA, XLM paleistas!")
+    print("🚀 OMEGA Botas su visais indikatoriais paleistas!")
     while True:
         try:
             await check_all_signals()
@@ -202,6 +269,27 @@ async def main_loop():
             print(f"⚠️ Klaida: {e}")
             time.sleep(60)
 
+# === TESTINIS PRANEŠIMAS ===
+async def send_test_message():
+    if bot:
+        test_msg = (
+            "🧪 **TESTAS: Jūsų OMEGA botas veikia!**\n"
+            "✅ Ryšys su Telegram – sėkmingas\n"
+            "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
+            "📊 Stebimi turtai: BTC, ETH, SOL, XRP, ZEC, ICP"
+        )
+        try:
+            await bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
+            print("✅ Testinis pranešimas išsiųstas į Telegram!")
+        except Exception as e:
+            print(f"❌ Klaida siunčiant testą: {e}")
+    else:
+        print("❌ Telegram botas neįjungtas (patikrinkite raktus)")
+
 # === PALEIDŽIAME ===
 if __name__ == "__main__":
+    # Siunčiam testinį pranešimą iš karto
+    asyncio.run(send_test_message())
+    
+    # Paleidžiam pagrindinį ciklą
     asyncio.run(main_loop())
