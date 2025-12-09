@@ -27,10 +27,6 @@ ASSETS = {
     "XRP": "XRP/USD",
     "ZEC": "ZEC/USD",
     "ICP": "ICP/USD",
-    "ARB": "ARB/USD",
-    "MATIC": "MATIC/USD",
-    "ADA": "ADA/USD",
-    "XLM": "XLM/USD"
 }
 
 # === ATR FUNKCIJA ===
