@@ -28,7 +28,7 @@ ASSETS = {
     "ZEC": "ZEC/USD"
 }
 
-# === FUNKCIJA: ATR (dinaminis stop-loss) ===
+# === ATR FUNKCIJA ===
 def calculate_atr(high, low, close, period=14):
     hl = high - low
     hc = abs(high - close.shift(1))
@@ -36,7 +36,7 @@ def calculate_atr(high, low, close, period=14):
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-# === FUNKCIJA: Fibonacci lygiai ===
+# === FIBONACCI LYGIŲ FUNKCIJA ===
 def calculate_fib_levels(high: float, low: float) -> dict:
     diff = high - low
     return {
@@ -49,7 +49,7 @@ def calculate_fib_levels(high: float, low: float) -> dict:
         "1.0": low,
     }
 
-# === FUNKCIJA: S/R lygiai ===
+# === S/R LYGIŲ FUNKCIJA ===
 def detect_sr_levels(prices: list, window: int = 5) -> list:
     levels = []
     for i in range(window, len(prices) - window):
@@ -67,8 +67,8 @@ def detect_sr_levels(prices: list, window: int = 5) -> list:
 def is_near_level(price: float, levels: list, tolerance: float = 0.003) -> bool:
     return any(abs(price - lvl) / lvl <= tolerance for lvl in levels)
 
-# === FUNKCIJA: Signalų skaičiavimas ===
-def calculate_signal(symbol: str) -> tuple:
+# === SIGNALŲ SKAIČIAVIMO FUNKCIJA (su priverstiniu režimu) ===
+def calculate_signal(symbol: str, force_mode=False) -> tuple:
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=200)
         if len(ohlcv) < 50:
@@ -79,7 +79,7 @@ def calculate_signal(symbol: str) -> tuple:
         current_price = closes.iloc[-1]
         current_volume = df["volume"].iloc[-1]
         avg_volume = df["volume"].rolling(20).mean().iloc[-1]
-        high_volume = current_volume > avg_volume * 1.5
+        high_volume = current_volume > avg_volume * (1.3 if force_mode else 1.5)
 
         ema9 = EMAIndicator(closes, window=9).ema_indicator()
         ema21 = EMAIndicator(closes, window=21).ema_indicator()
@@ -101,25 +101,28 @@ def calculate_signal(symbol: str) -> tuple:
         body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
         wick_up = df["high"].iloc[-1] - max(df["close"].iloc[-1], df["open"].iloc[-1])
         wick_down = min(df["close"].iloc[-1], df["open"].iloc[-1]) - df["low"].iloc[-1]
-        clean_candle = (wick_up < 0.4 * body) and (wick_down < 0.4 * body)
+        clean_candle = (wick_up < (0.5 if force_mode else 0.4) * body) and (wick_down < (0.5 if force_mode else 0.4) * body)
 
         score = 0
-        if high_volume: score += 25
-        if near_sr: score += 25
+        if high_volume: score += (20 if force_mode else 25)
+        if near_sr: score += (20 if force_mode else 25)
         if near_fib_buy or near_fib_sell: score += 30
-        if clean_candle: score += 20
+        if clean_candle: score += (15 if force_mode else 20)
         confidence = min(score / 100.0, 1.0)
+
+        threshold = 0.60 if force_mode else 0.75
+        rr_factor = 1.5 if force_mode else 1.8
 
         atr_val = calculate_atr(df["high"], df["low"], df["close"], 14).iloc[-1]
 
-        if ema_cross_up and near_fib_buy and confidence >= 0.75:
+        if ema_cross_up and confidence >= threshold:
             sl = min(fib["0.786"], recent_low * 0.995)
-            tp = current_price + (current_price - sl) * 1.8
+            tp = current_price + (current_price - sl) * rr_factor
             return "BUY", confidence, current_price, tp, sl
 
-        elif ema_cross_down and near_fib_sell and confidence >= 0.75:
+        elif ema_cross_down and confidence >= threshold:
             sl = max(fib["0.236"], recent_high * 1.005)
-            tp = current_price - (sl - current_price) * 1.8
+            tp = current_price - (sl - current_price) * rr_factor
             return "SELL", confidence, current_price, tp, sl
 
         else:
@@ -129,7 +132,7 @@ def calculate_signal(symbol: str) -> tuple:
         print(f"Klaida {symbol}: {e}")
         return "hold", 0.0, 0, 0, 0
 
-# === FUNKCIJA: Siuntimas į Telegram ===
+# === SIUNTIMO Į TELEGRAM FUNKCIJA ===
 async def send_signal(name: str, signal: str, price: float, tp: float, sl: float, confidence: float):
     if not bot:
         return
@@ -152,7 +155,6 @@ async def send_signal(name: str, signal: str, price: float, tp: float, sl: float
 
 # === SELF-PING FUNKCIJA (neleidžia Colab užmigti) ===
 def keep_colab_alive():
-    """Siunčia užklausą į Colab kas 5 min, kad sesija išliktų aktyvi."""
     while True:
         try:
             requests.get("https://colab.research.google.com/")
@@ -160,20 +162,35 @@ def keep_colab_alive():
             pass
         time.sleep(300)  # kas 5 min
 
-# Paleidžiam self-ping giją
 threading.Thread(target=keep_colab_alive, daemon=True).start()
 
-# === PAGRINDINIS CIKLAS ===
+# === PAGRINDINIS CIKLAS SU PRIVERSTINIU SIGNALU ===
+last_forced_signal_time = None
+
 async def check_all_signals():
-    print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
+    global last_forced_signal_time
+    now = pd.Timestamp.now()
+    print(f"\n🕒 Tikrinama: {now}")
+
+    # 1. Bandome rasti įprastą signalą (≥75%)
     for name, pair in ASSETS.items():
-        signal, conf, price, tp, sl = calculate_signal(pair)
+        signal, conf, price, tp, sl = calculate_signal(pair, force_mode=False)
         if signal != "hold":
             await send_signal(name, signal, price, tp, sl, conf)
-        time.sleep(1)
+            return
+
+    # 2. Jei įprastų nėra – tikriname, ar laikas priverstiniam (kas 15 min)
+    if last_forced_signal_time is None or (now - last_forced_signal_time).total_seconds() >= 900:
+        print("🔍 Priverstinis signalo paieška (≥60%)...")
+        for name, pair in ASSETS.items():
+            signal, conf, price, tp, sl = calculate_signal(pair, force_mode=True)
+            if signal != "hold":
+                await send_signal(name, signal, price, tp, sl, conf)
+                last_forced_signal_time = now
+                return
 
 async def main_loop():
-    print("🚀 OMEGA 15m Signal Botas (Kraken + TP/SL) paleistas!")
+    print("🚀 OMEGA 15m Signal Botas su priverstiniais signalais paleistas!")
     while True:
         try:
             await check_all_signals()
@@ -186,6 +203,6 @@ async def main_loop():
             print(f"⚠️ Klaida: {e}")
             time.sleep(60)
 
-# === PAGALBINE FUNKCIJA ===
+# === PALEIDŽIAME ===
 if __name__ == "__main__":
     asyncio.run(main_loop())
