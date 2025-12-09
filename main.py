@@ -1,3 +1,20 @@
+# TAI PALEISKITE TIESIOGIAI COLAB LANGELYJE
+import asyncio
+from telegram import Bot
+
+TELEGRAM_TOKEN = "8357750072:AAEImtZV_PkrsMpaZyimyb00RY-zFQLNrUY"
+CHAT_ID = "5810819607"
+
+bot = Bot(token=TELEGRAM_TOKEN)
+
+async def send_test():
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text="✅ Colab testas sėkmingas!")
+        print("✅ Testas išsiųstas!")
+    except Exception as e:
+        print(f"❌ Klaida: {e}")
+
+await send_test()
 import os
 import asyncio
 import ccxt
