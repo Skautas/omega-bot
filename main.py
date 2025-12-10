@@ -30,8 +30,7 @@ def get_exchange(symbol):
 # === 16 TURTŲ SĄRAŠAS ===
 ASSETS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD", 
-    "ZEC/USD", "XLM/USD", "DOT/USD", "WLFI/USDT", "SUI/USDT", "LINK/USD", 
-    "LTC/USD", "BCH/USD", "STRK/USDT", "ICP/USD"
+    "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
 ]
 
 TIMEFRAME = "15m"
@@ -52,14 +51,14 @@ def get_bias(rsi_val, macd_line, macd_signal, ema9, ema26, close):
     if rsi_val < 35 or rsi_val > 65:
         rsi_bias = "NEUTRAL"
     else:
-        rsi_bias = "LONG" if rsi_val > 50 else "SHORT"
-    
-    macd_bias = "LONG" if md.iloc[-1] > ms.iloc[-1] else "SHORT"
+        rsi_bias = "LONG" if rsi_val > 50 else "SHORT"    
+    # ✅ Pataisyta eilutė
+    macd_bias = "LONG" if macd_line.iloc[-1] > macd_signal.iloc[-1] else "SHORT"
     ema_bias = "LONG" if ema9.iloc[-1] > ema26.iloc[-1] else "SHORT"
     
     biases = [rsi_bias, macd_bias, ema_bias]
     long_count = biases.count("LONG")
-    short_count = biases.count("SHORT")
+    short_count = biases.count("SHORT")    
     
     if long_count >= 2:
         return "LONG"
