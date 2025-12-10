@@ -8,7 +8,7 @@ import threading
 import requests
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import EMAIndicator, MACD
-from ta.vol, AverageTrueRange
+from ta.volatility import BollingerBands, AverageTrueRange
 from telegram import Bot
 
 # === KONFIGŪRACIJA ===
