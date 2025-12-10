@@ -1,4 +1,6 @@
 import os
+from telegram import Bot
+import ccxt
 import asyncio
 import ccxt
 import pandas as pd
