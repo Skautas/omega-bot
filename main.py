@@ -8,6 +8,7 @@ import threading
 import requests
 from ta.trend import EMAIndicator
 from telegram import Bot
+from fundamental_filter import fundamental_filter
 
 # === Konfigūracija ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -192,14 +193,14 @@ async def send_signal(name, signal, price, tp, sl, confidence):
             f"🎯 TP: {tp:.4f} USD\n"
             f"🛑 SL: {sl:.4f} USD\n"
             f"📊 RR: {rr} | Tikimybė: {confidence:.1%}\n"
-            f"🔍 Patvirtinimas: Fib + S/R + OB + Liquidity + MSS + POC"
+            f"🔍 Patvirtinimas: Fib + S/R + OB + Liquidity + MSS + POC + Fundamental"
         )
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
     except Exception as e:
         print(f"❌ Telegram klaida: {e}")
 
-# === Self-ping funkcija (neleidžia Colab užmigti) ===
+# === Self-ping funkcija ===
 def keep_colab_alive():
     while True:
         try:
@@ -217,6 +218,11 @@ async def check_all_signals():
     global last_forced_signal_time
     now = pd.Timestamp.now()
     print(f"\n🕒 Tikrinama: {now}")
+
+    # Fundamentalų filtras – BTC kaip proxy
+    if not fundamental_filter("BTC"):
+        print("🛑 Prekyba sustabdyta dėl makro/naujienų")
+        return
 
     for name, pair in ASSETS.items():
         signal, conf, price, tp, sl = calculate_signal(pair, force_mode=False)
@@ -240,7 +246,8 @@ async def send_test_message():
             "🧪 **TESTAS: Jūsų OMEGA botas veikia!**\n"
             "✅ Ryšys su Telegram – sėkmingas\n"
             "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
-            "📊 Turtai: BTC, ETH, SOL, XRP, ZEC, ICP"
+            "📊 Turtai: BTC, ETH, SOL, XRP, ZEC, ICP\n"
+            "🔍 Stebima: Fundamentalai + Technika"
         )
         try:
             await bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
@@ -253,7 +260,6 @@ async def send_test_message():
 # === Paleidimas ===
 if __name__ == "__main__":
     asyncio.run(send_test_message())
-    asyncio.run(main_loop := asyncio.wait_for(check_all_signals(), timeout=1))
     while True:
         asyncio.run(check_all_signals())
         time.sleep(900)
