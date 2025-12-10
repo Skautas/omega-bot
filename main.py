@@ -1,6 +1,4 @@
 import os
-from telegram import Bot
-import ccxt
 import asyncio
 import ccxt
 import pandas as pd
@@ -26,7 +24,13 @@ ASSETS = {
     "SOL": "SOL/USD",
     "XRP": "XRP/USD",
     "ZEC": "ZEC/USD",
-    "ICP": "ICP/USD"
+    "ICP": "ICP/USD",
+    "DOT": "DOT/USD",
+    "DOGE": "DOGE/USD",
+    "LINK": "LINK/USD",
+    "ADA": "ADA/USD",
+    "LTC": "LTC/USD",
+    "BCH": "BCH/USD"
 }
 
 # === Pagalbinės funkcijos ===
@@ -118,7 +122,7 @@ def calculate_signal(symbol, force_mode=False):
         closes = df["close"]
         current_price = closes.iloc[-1]
         avg_volume = df["volume"].rolling(20).mean().iloc[-1]
-        high_volume = df["volume"].iloc[-1] > avg_volume * (1.3 if force_mode else 1.5)
+        high_volume = df["volume"].iloc[-1] > avg_volume * (1.2 if force_mode else 1.5)
 
         ema9 = EMAIndicator(closes, window=9).ema_indicator()
         ema21 = EMAIndicator(closes, window=21).ema_indicator()
@@ -148,21 +152,21 @@ def calculate_signal(symbol, force_mode=False):
         body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
         wick_up = df["high"].iloc[-1] - max(df["close"].iloc[-1], df["open"].iloc[-1])
         wick_down = min(df["close"].iloc[-1], df["open"].iloc[-1]) - df["low"].iloc[-1]
-        clean_candle = (wick_up < (0.5 if force_mode else 0.4) * body) and (wick_down < (0.5 if force_mode else 0.4) * body)
+        clean_candle = (wick_up < (0.6 if force_mode else 0.4) * body) and (wick_down < (0.6 if force_mode else 0.4) * body)
 
         score = 0
-        if high_volume: score += 20 if force_mode else 25
-        if near_sr: score += 20 if force_mode else 25
-        if near_fib_buy or near_fib_sell: score += 30
-        if clean_candle: score += 15 if force_mode else 20
-        if near_liquidity: score += 15
-        if near_ob_bull or near_ob_bear: score += 15
-        if (mss == "bullish" and ema_cross_up) or (mss == "bearish" and ema_cross_down): score += 10
-        if near_poc: score += 10
+        if high_volume: score += 15 if force_mode else 25
+        if near_sr: score += 15 if force_mode else 25
+        if near_fib_buy or near_fib_sell: score += 25 if force_mode else 30
+        if clean_candle: score += 10 if force_mode else 20
+        if near_liquidity: score += 10 if force_mode else 15
+        if near_ob_bull or near_ob_bear: score += 10 if force_mode else 15
+        if (mss == "bullish" and ema_cross_up) or (mss == "bearish" and ema_cross_down): score += 5 if force_mode else 10
+        if near_poc: score += 5 if force_mode else 10
 
         confidence = min(score / 100.0, 1.0)
-        threshold = 0.60 if force_mode else 0.75
-        rr_factor = 1.5 if force_mode else 1.8
+        threshold = 0.50 if force_mode else 0.75  # ✅ Sumažinta iš 60% → 50%
+        rr_factor = 1.3 if force_mode else 1.8
 
         atr_val = calculate_atr(df["high"], df["low"], df["close"], 14).iloc[-1]
 
@@ -221,7 +225,7 @@ async def check_all_signals():
     now = pd.Timestamp.now()
     print(f"\n🕒 Tikrinama: {now}")
 
-    # Fundamentalų filtras – BTC kaip proxy
+    # Fundamentalų filtras
     if not fundamental_filter("BTC"):
         print("🛑 Prekyba sustabdyta dėl makro/naujienų")
         return
@@ -233,7 +237,7 @@ async def check_all_signals():
             return
 
     if last_forced_signal_time is None or (now - last_forced_signal_time).total_seconds() >= 900:
-        print("🔍 Priverstinis signalo paieška (≥60%)...")
+        print("🔍 Priverstinis signalo paieška (≥50%)...")  # ✅ Atsinaujino pranešimas
         for name, pair in ASSETS.items():
             signal, conf, price, tp, sl = calculate_signal(pair, force_mode=True)
             if signal != "hold":
@@ -242,26 +246,28 @@ async def check_all_signals():
                 return
 
 # === Testinė funkcija ===
-async def send_test_message():
-    if bot:
-        test_msg = (
-            "🧪 **TESTAS: Jūsų OMEGA botas veikia!**\n"
-            "✅ Ryšys su Telegram – sėkmingas\n"
-            "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
-            "📊 Turtai: BTC, ETH, SOL, XRP, ZEC, ICP\n"
-            "🔍 Stebima: Fundamentalai + Technika"
-        )
-        try:
+def send_test_message_sync():
+    if not bot:
+        print("❌ Telegram botas neįjungtas")
+        return
+    try:
+        import asyncio
+        async def _send():
+            test_msg = (
+                "🧪 **TESTAS: OMEGA botas veikia!**\n"
+                "✅ Ryšys su Telegram – sėkmingas\n"
+                "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
+                "📊 Turtai: BTC, ETH, SOL, XRP, ZEC, ICP, DOT, DOGE, LINK, ADA, LTC, BCH"
+            )
             await bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
             print("✅ Testinis pranešimas išsiųstas į Telegram!")
-        except Exception as e:
-            print(f"❌ Klaida siunčiant testą: {e}")
-    else:
-        print("❌ Telegram botas neįjungtas")
+        asyncio.run(_send())
+    except Exception as e:
+        print(f"❌ Klaida siunčiant testą: {e}")
 
 # === Paleidimas ===
 if __name__ == "__main__":
-    asyncio.run(send_test_message())
+    send_test_message_sync()
     while True:
         asyncio.run(check_all_signals())
         time.sleep(900)
