@@ -1,5 +1,4 @@
 import os
-import asyncio
 import ccxt
 import pandas as pd
 import numpy as np
@@ -18,7 +17,7 @@ MULTI_CHAT_IDS = [CHAT_ID]
 
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# === TURTŲ SĄRAŠAS (tik Kraken palaikomi) ===
+# === TURTŲ SĄRAŠAS ===
 ASSETS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD", 
     "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
@@ -38,7 +37,6 @@ def calculate_ema(close, window):
     return EMAIndicator(close, window).ema_indicator()
 
 def get_bias(rsi_val, macd_line, macd_signal, ema9, ema26, close):
-    """Grąžina rinkos kryptį: LONG/SHORT/NEUTRAL"""
     rsi_bias = "NEUTRAL"
     if rsi_val < 35 or rsi_val > 65:
         rsi_bias = "NEUTRAL"
@@ -60,7 +58,6 @@ def get_bias(rsi_val, macd_line, macd_signal, ema9, ema26, close):
         return "NEUTRAL"
 
 def calculate_confidence(symbol, df, bias):
-    """Skaičiuoja 0–100% tikimybę"""
     close = df["close"]
     rsi = calculate_rsi(close)
     rsi_val = rsi.iloc[-1]
@@ -74,18 +71,18 @@ def calculate_confidence(symbol, df, bias):
     score = 0
     signal_type = "HOLD"
 
-    # === MEAN-REVERSION BUY (RSI < 40) ===
+    # MEAN-REVERSION (RSI < 40)
     if rsi_val < 40:
         signal_type = "BUY"
-        score += 25  # RSI < 40
+        score += 25
         if current_price <= bb_low:
             score += 20
         if volume_ratio > 1.5:
             score += 15
         if rsi_val < 30:
-            score += 10  # Papildomas bonusas už gilų oversold
+            score += 10
 
-    # === MOMENTUM SELL (RSI > 65) ===
+    # MOMENTUM SELL (RSI > 65)
     elif rsi_val > 65:
         signal_type = "SELL"
         williams_r = WilliamsRIndicator(df["high"], df["low"], close).williams_r().iloc[-1]
@@ -98,9 +95,9 @@ def calculate_confidence(symbol, df, bias):
         if rsi_val > 75:
             score += 10
 
-    # === WATCH ZONOS ===
+    # WATCH ZONOS
     elif (rsi_val >= 40 and rsi_val < 45) or (rsi_val <= 65 and rsi_val > 60):
-        score += 5  # Švelnus ženklas
+        score += 5
 
     confidence = min(score, 100)
 
@@ -113,8 +110,8 @@ def calculate_confidence(symbol, df, bias):
 
     return signal_type, confidence, fires, rsi_val
 
-# === SIUNTIMO FUNKCIJA ===
-async def send_alert(name, signal, price, confidence, fires, rsi_val):
+# === SINCHRONINĖ SIUNTIMO FUNKCIJA ===
+def send_alert_sync(name, signal, price, confidence, fires, rsi_val):
     if not bot:
         return
     for chat_id in MULTI_CHAT_IDS:
@@ -123,32 +120,31 @@ async def send_alert(name, signal, price, confidence, fires, rsi_val):
                 msg = (
                     f"🟢 {fires} **BUY ALERT **({name})\n"
                     f"💰 Kaina: {price:.4f}\n"
-                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%\n"
-                    f"🎯 Strategija: Mean-Reversion (RSI<40)"
+                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
                 )
             elif signal == "SELL" and confidence >= 60:
                 msg = (
                     f"🔴 {fires} **SELL ALERT **({name})\n"
                     f"💰 Kaina: {price:.4f}\n"
-                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%\n"
-                    f"🎯 Strategija: Momentum (RSI>65)"
+                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
                 )
             elif (signal == "BUY" and confidence >= 40) or (signal == "SELL" and confidence >= 40):
                 msg = (
                     f"🟡 {fires} **WATCH **({name})\n"
                     f"💰 Kaina: {price:.4f}\n"
-                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%\n"
-                    f"⚠️ Laukite stipresnio patvirtinimo"
+                    f"📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
                 )
             else:
                 return
-            await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+            
+            bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
             print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
+            
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
-# === PAGRINDINĖ SIGNALŲ FUNKCIJA ===
-async def check_signals():
+# === SINCHRONINIS SIGNALŲ TIKRINIMAS ===
+def check_signals_sync():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for symbol in ASSETS:
         try:
@@ -172,13 +168,13 @@ async def check_signals():
             asset_name = symbol.split("/")[0]
             
             if signal != "HOLD" and confidence >= 40:
-                await send_alert(asset_name, signal, current_price, confidence, fires, rsi_val)
+                send_alert_sync(asset_name, signal, current_price, confidence, fires, rsi_val)
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
             continue
 
-# === SELF-PING FUNKCIJA (neleidžia Colab užmigti) ===
+# === SELF-PING ===
 def keep_colab_alive():
     while True:
         try:
@@ -190,7 +186,7 @@ def keep_colab_alive():
 threading.Thread(target=keep_colab_alive, daemon=True).start()
 
 # === TESTINIS PRANEŠIMAS ===
-def send_test_message():
+def send_test_message_sync():
     if not bot:
         print("❌ Telegram botas neįjungtas")
         return
@@ -198,17 +194,16 @@ def send_test_message():
         test_msg = (
             "🧪 **OMEGA BOT TESTAS**\n"
             "✅ Veikia su RSI < 40 strategija\n"
-            "📊 Stebimi turtai: 13 Kraken altcoin’ų\n"
-            "🕒 Laikas: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            "📊 Stebimi turtai: 13 Kraken altcoin’ų"
         )
-        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown"))
+        bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
         print("✅ Testinis pranešimas išsiųstas!")
     except Exception as e:
         print(f"❌ Klaida siunčiant testą: {e}")
 
-# === PAGRINDINIS CIKLAS ===
+# === PAGRINDINIS CIKLAS (SINCHRONINIS) ===
 if __name__ == "__main__":
-    send_test_message()
+    send_test_message_sync()
     while True:
-        asyncio.run(check_signals())
-        time.sleep(900)  # Tikrink kas 15 min
+        check_signals_sync()
+        time.sleep(900)
