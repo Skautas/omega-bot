@@ -110,8 +110,8 @@ def calculate_confidence(symbol, df, bias):
 
     return signal_type, confidence, fires, rsi_val
 
-# === SINCHRONINĖ SIUNTIMO FUNKCIJA ===
-def send_alert_sync(name, signal, price, confidence, fires, rsi_val):
+# === ASINCHRONINĖ SIUNTIMO FUNKCIJA ===
+async def send_alert_async(name, signal, price, confidence, fires, rsi_val):
     if not bot:
         return
     for chat_id in MULTI_CHAT_IDS:
@@ -137,7 +137,7 @@ def send_alert_sync(name, signal, price, confidence, fires, rsi_val):
             else:
                 return
             
-            bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+            await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
             print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
             
         except Exception as e:
@@ -168,7 +168,7 @@ def check_signals_sync():
             asset_name = symbol.split("/")[0]
             
             if signal != "HOLD" and confidence >= 40:
-                send_alert_sync(asset_name, signal, current_price, confidence, fires, rsi_val)
+                asyncio.run(send_alert_async(asset_name, signal, current_price, confidence, fires, rsi_val))
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
@@ -186,7 +186,7 @@ def keep_colab_alive():
 threading.Thread(target=keep_colab_alive, daemon=True).start()
 
 # === TESTINIS PRANEŠIMAS ===
-def send_test_message_sync():
+async def send_test_message_async():
     if not bot:
         print("❌ Telegram botas neįjungtas")
         return
@@ -196,14 +196,14 @@ def send_test_message_sync():
             "✅ Veikia su RSI < 40 strategija\n"
             "📊 Stebimi turtai: 13 Kraken altcoin’ų"
         )
-        bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
+        await bot.send_message(chat_id=CHAT_ID, text=test_msg, parse_mode="Markdown")
         print("✅ Testinis pranešimas išsiųstas!")
     except Exception as e:
         print(f"❌ Klaida siunčiant testą: {e}")
 
-# === PAGRINDINIS CIKLAS (SINCHRONINIS) ===
+# === PAGRINDINIS CIKLAS ===
 if __name__ == "__main__":
-    send_test_message_sync()
+    asyncio.run(send_test_message_async())
     while True:
-        check_signals_sync()
+        asyncio.run(check_signals_sync())
         time.sleep(900)
