@@ -1,4 +1,5 @@
 import os
+import asyncio
 import ccxt
 import pandas as pd
 import numpy as np
@@ -17,7 +18,7 @@ MULTI_CHAT_IDS = [CHAT_ID]
 
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# === TURTŲ SĄRAŠAS ===
+# === TURTŲ SĄRAŠAS (tik Kraken) ===
 ASSETS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD", 
     "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
@@ -143,8 +144,8 @@ async def send_alert_async(name, signal, price, confidence, fires, rsi_val):
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
-# === SINCHRONINIS SIGNALŲ TIKRINIMAS ===
-def check_signals_sync():
+# === ASINCHRONINIS SIGNALŲ TIKRINIMAS ===
+async def check_signals_async():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for symbol in ASSETS:
         try:
@@ -168,13 +169,13 @@ def check_signals_sync():
             asset_name = symbol.split("/")[0]
             
             if signal != "HOLD" and confidence >= 40:
-                asyncio.run(send_alert_async(asset_name, signal, current_price, confidence, fires, rsi_val))
+                await send_alert_async(asset_name, signal, current_price, confidence, fires, rsi_val)
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
             continue
 
-# === SELF-PING ===
+# === SELF-PING FUNKCIJA ===
 def keep_colab_alive():
     while True:
         try:
@@ -202,8 +203,12 @@ async def send_test_message_async():
         print(f"❌ Klaida siunčiant testą: {e}")
 
 # === PAGRINDINIS CIKLAS ===
-if __name__ == "__main__":
-    asyncio.run(send_test_message_async())
+async def main():
+    await send_test_message_async()
     while True:
-        asyncio.run(check_signals_sync())
-        time.sleep(900)
+        await check_signals_async()
+        await asyncio.sleep(900)
+
+# === PALEIDŽIAME ===
+if __name__ == "__main__":
+    asyncio.run(main())
