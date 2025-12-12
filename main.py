@@ -132,6 +132,9 @@ async def check_signals():
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             close = df["close"]
             
+            # Apibrėžiame Bollinger Bands čia
+            bb = BollingerBands(close)
+            
             rsi = calculate_rsi(close)
             macd_line, macd_signal = calculate_macd(close)
             ema9 = calculate_ema(close, 9)
@@ -141,6 +144,7 @@ async def check_signals():
             current_price = close.iloc[-1]
             asset_name = symbol.split("/")[0]
             
+            # Panaudojame bb čia
             sl, tp = calculate_sl_tp(current_price, rsi_val, ema9, ema26, bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1])
             
             if signal and confidence >= 60:
