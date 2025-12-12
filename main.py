@@ -18,7 +18,7 @@ MULTI_CHAT_IDS = [CHAT_ID]
 
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# === TURTŲ SĄRAŠAS ===
+# === TURTŲ SĄRAŠAS (tik Kraken) ===
 ASSETS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD", 
     "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
@@ -37,17 +37,16 @@ def calculate_macd(close):
 def calculate_ema(close, window):
     return EMAIndicator(close, window).ema_indicator()
 
-def calculate_sl_tp(current_price, rsi_val, ema9, ema26, bb_low, bb_high):
+def calculate_sl_tp(current_price, signal_type, bb_low, bb_high, ema26_val):
     """Grąžina SL ir TP pagal signalo tipą"""
-    if rsi_val < 40:  # BUY
-        sl = max(bb_low, ema26.iloc[-1] * 0.995)
+    if signal_type == "BUY":
+        sl = max(bb_low, ema26_val * 0.995)
         tp = current_price + (current_price - sl) * 1.8
-    elif rsi_val > 65:  # SELL
-        sl = min(bb_high, ema26.iloc[-1] * 1.005)
+    elif signal_type == "SELL":
+        sl = min(bb_high, ema26_val * 1.005)
         tp = current_price - (sl - current_price) * 1.8
     else:
-        sl = 0
-        tp = 0
+        sl, tp = 0, 0
     return sl, tp
 
 def calculate_confidence(symbol, df):
@@ -81,41 +80,26 @@ def calculate_confidence(symbol, df):
             score += 15
 
     confidence = min(score, 100)
-
-    return signal_type, confidence, rsi_val
+    return signal_type, confidence, rsi_val, bb_low, bb_high
 
 # === SIUNTIMAS ===
-async def send_alert(name, signal, price, confidence, rsi_val, sl, tp):
+async def send_alert(name, signal, price, sl, tp, confidence, rsi_val):
     if not bot:
         return
     for chat_id in MULTI_CHAT_IDS:
         try:
-            if signal == "BUY":
-                emoji = "🟢"
-                msg = (
-                    f"{emoji} **BUY SIGNAL (15m)**\n"
-                    f"🪙 {name}\n"
-                    f"💰 Įėjimas: {price:.4f} USD\n"
-                    f"🎯 TP: {tp:.4f} USD\n"
-                    f"🛑 SL: {sl:.4f} USD\n"
-                    f"📊 RR: {abs(tp - price) / abs(price - sl):.1f} | Tikimybė: {confidence:.1%}"
-                )
-            elif signal == "SELL":
-                emoji = "🔴"
-                msg = (
-                    f"{emoji} **SELL SIGNAL (15m)**\n"
-                    f"🪙 {name}\n"
-                    f"💰 Įėjimas: {price:.4f} USD\n"
-                    f"🎯 TP: {tp:.4f} USD\n"
-                    f"🛑 SL: {sl:.4f} USD\n"
-                    f"📊 RR: {abs(tp - price) / abs(price - sl):.1f} | Tikimybė: {confidence:.1%}"
-                )
-            else:
-                return
-            
+            emoji = "🟢" if signal == "BUY" else "🔴"
+            rr = abs(tp - price) / abs(price - sl) if sl != price else 0
+            msg = (
+                f"{emoji} **{signal} SIGNAL (15m)**\n"
+                f"🪙 {name}\n"
+                f"💰 Įėjimas: {price:.4f} USD\n"
+                f"🎯 TP: {tp:.4f} USD\n"
+                f"🛑 SL: {sl:.4f} USD\n"
+                f"📊 RR: {rr:.1f} | Tikimybė: {confidence:.1%}"
+            )
             await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
             print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
-            
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
@@ -132,23 +116,14 @@ async def check_signals():
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             close = df["close"]
             
-            # Apibrėžiame Bollinger Bands čia
-            bb = BollingerBands(close)
-            
-            rsi = calculate_rsi(close)
-            macd_line, macd_signal = calculate_macd(close)
-            ema9 = calculate_ema(close, 9)
-            ema26 = calculate_ema(close, 26)
-            
-            signal, confidence, rsi_val = calculate_confidence(symbol, df)
+            signal, confidence, rsi_val, bb_low, bb_high = calculate_confidence(symbol, df)
             current_price = close.iloc[-1]
             asset_name = symbol.split("/")[0]
-            
-            # Panaudojame bb čia
-            sl, tp = calculate_sl_tp(current_price, rsi_val, ema9, ema26, bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1])
+            ema26_val = calculate_ema(close, 26).iloc[-1]
             
             if signal and confidence >= 60:
-                await send_alert(asset_name, signal, current_price, confidence, rsi_val, sl, tp)
+                sl, tp = calculate_sl_tp(current_price, signal, bb_low, bb_high, ema26_val)
+                await send_alert(asset_name, signal, current_price, sl, tp, confidence, rsi_val)
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
@@ -179,7 +154,7 @@ async def main():
     await send_test()
     while True:
         await check_signals()
-        await asyncio.sleep(600)  # Tikrink kas 10 min
+        await asyncio.sleep(600)  # Kas 10 min
 
 if __name__ == "__main__":
     asyncio.run(main())
