@@ -6,9 +6,9 @@ import numpy as np
 import time
 import threading
 import requests
-from ta.momentum import RSIIndicator, WilliamsRIndicator
+from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
-from ta.volatility import BollingerBands, AverageTrueRange
+from ta.volatility import BollingerBands
 from telegram import Bot
 
 # === KONFIGŪRACIJA ===
@@ -18,7 +18,7 @@ MULTI_CHAT_IDS = [CHAT_ID]
 
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# === TURTŲ SĄRAŠAS (tik Kraken) ===
+# === TURTŲ SĄRAŠAS ===
 ASSETS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD", 
     "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
@@ -37,28 +37,20 @@ def calculate_macd(close):
 def calculate_ema(close, window):
     return EMAIndicator(close, window).ema_indicator()
 
-def get_bias(rsi_val, macd_line, macd_signal, ema9, ema26, close):
-    rsi_bias = "NEUTRAL"
-    if rsi_val < 35 or rsi_val > 65:
-        rsi_bias = "NEUTRAL"
+def calculate_sl_tp(current_price, rsi_val, ema9, ema26, bb_low, bb_high):
+    """Grąžina SL ir TP pagal signalo tipą"""
+    if rsi_val < 40:  # BUY
+        sl = max(bb_low, ema26.iloc[-1] * 0.995)
+        tp = current_price + (current_price - sl) * 1.8
+    elif rsi_val > 65:  # SELL
+        sl = min(bb_high, ema26.iloc[-1] * 1.005)
+        tp = current_price - (sl - current_price) * 1.8
     else:
-        rsi_bias = "LONG" if rsi_val > 50 else "SHORT"
-    
-    macd_bias = "LONG" if macd_line.iloc[-1] > macd_signal.iloc[-1] else "SHORT"
-    ema_bias = "LONG" if ema9.iloc[-1] > ema26.iloc[-1] else "SHORT"
-    
-    biases = [rsi_bias, macd_bias, ema_bias]
-    long_count = biases.count("LONG")
-    short_count = biases.count("SHORT")
-    
-    if long_count >= 2:
-        return "LONG"
-    elif short_count >= 2:
-        return "SHORT"
-    else:
-        return "NEUTRAL"
+        sl = 0
+        tp = 0
+    return sl, tp
 
-def calculate_confidence(symbol, df, bias):
+def calculate_confidence(symbol, df):
     close = df["close"]
     rsi = calculate_rsi(close)
     rsi_val = rsi.iloc[-1]
@@ -70,7 +62,7 @@ def calculate_confidence(symbol, df, bias):
     volume_ratio = df["volume"].iloc[-1] / df["volume"].rolling(20).mean().iloc[-1]
     
     score = 0
-    signal_type = "HOLD"
+    signal_type = None
 
     if rsi_val < 40:
         signal_type = "BUY"
@@ -79,55 +71,55 @@ def calculate_confidence(symbol, df, bias):
             score += 20
         if volume_ratio > 1.5:
             score += 15
-        if rsi_val < 30:
-            score += 10
 
     elif rsi_val > 65:
         signal_type = "SELL"
-        williams_r = WilliamsRIndicator(df["high"], df["low"], close).williams_r().iloc[-1]
-        if williams_r > -15:
-            score += 15
-        if volume_ratio > 1.8:
-            score += 15
+        score += 25
         if current_price >= bb_high:
             score += 20
-        if rsi_val > 75:
-            score += 10
-
-    elif (rsi_val >= 40 and rsi_val < 45) or (rsi_val <= 65 and rsi_val > 60):
-        score += 5
+        if volume_ratio > 1.8:
+            score += 15
 
     confidence = min(score, 100)
 
-    if confidence >= 60:
-        fires = "🔥🔥🔥"
-    elif confidence >= 40:
-        fires = "🔥🔥"
-    else:
-        fires = "🔥"
+    return signal_type, confidence, rsi_val
 
-    return signal_type, confidence, fires, rsi_val
-
-# === TELEGRAM SIUNTIMAS ===
-async def send_alert(name, signal, price, confidence, fires, rsi_val):
+# === SIUNTIMAS ===
+async def send_alert(name, signal, price, confidence, rsi_val, sl, tp):
     if not bot:
         return
     for chat_id in MULTI_CHAT_IDS:
         try:
-            if signal == "BUY" and confidence >= 60:
-                msg = f"🟢 {fires} **BUY ALERT **({name})\n💰 Kaina: {price:.4f}\n📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
-            elif signal == "SELL" and confidence >= 60:
-                msg = f"🔴 {fires} **SELL ALERT **({name})\n💰 Kaina: {price:.4f}\n📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
-            elif (signal == "BUY" and confidence >= 40) or (signal == "SELL" and confidence >= 40):
-                msg = f"🟡 {fires} **WATCH **({name})\n💰 Kaina: {price:.4f}\n📊 RSI: {rsi_val:.1f} | Tikimybė: {confidence:.1f}%"
+            if signal == "BUY":
+                emoji = "🟢"
+                msg = (
+                    f"{emoji} **BUY SIGNAL (15m)**\n"
+                    f"🪙 {name}\n"
+                    f"💰 Įėjimas: {price:.4f} USD\n"
+                    f"🎯 TP: {tp:.4f} USD\n"
+                    f"🛑 SL: {sl:.4f} USD\n"
+                    f"📊 RR: {abs(tp - price) / abs(price - sl):.1f} | Tikimybė: {confidence:.1%}"
+                )
+            elif signal == "SELL":
+                emoji = "🔴"
+                msg = (
+                    f"{emoji} **SELL SIGNAL (15m)**\n"
+                    f"🪙 {name}\n"
+                    f"💰 Įėjimas: {price:.4f} USD\n"
+                    f"🎯 TP: {tp:.4f} USD\n"
+                    f"🛑 SL: {sl:.4f} USD\n"
+                    f"📊 RR: {abs(tp - price) / abs(price - sl):.1f} | Tikimybė: {confidence:.1%}"
+                )
             else:
                 return
+            
             await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
             print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
+            
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
-# === SIGNALŲ TIKRINIMAS ===
+# === TIKRINIMAS ===
 async def check_signals():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for symbol in ASSETS:
@@ -145,14 +137,14 @@ async def check_signals():
             ema9 = calculate_ema(close, 9)
             ema26 = calculate_ema(close, 26)
             
-            bias = get_bias(rsi.iloc[-1], macd_line, macd_signal, ema9, ema26, close)
-            signal, confidence, fires, rsi_val = calculate_confidence(symbol, df, bias)
-            
+            signal, confidence, rsi_val = calculate_confidence(symbol, df)
             current_price = close.iloc[-1]
             asset_name = symbol.split("/")[0]
             
-            if signal != "HOLD" and confidence >= 40:
-                await send_alert(asset_name, signal, current_price, confidence, fires, rsi_val)
+            sl, tp = calculate_sl_tp(current_price, rsi_val, ema9, ema26, bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1])
+            
+            if signal and confidence >= 60:
+                await send_alert(asset_name, signal, current_price, confidence, rsi_val, sl, tp)
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
@@ -172,15 +164,18 @@ threading.Thread(target=keep_colab_alive, daemon=True).start()
 # === TESTAS ===
 async def send_test():
     if bot:
-        await bot.send_message(chat_id=CHAT_ID, text="🧪 **OMEGA BOT VEIKIA**", parse_mode="Markdown")
-        print("✅ Testas išsiųstas!")
+        try:
+            await bot.send_message(chat_id=CHAT_ID, text="✅ **OMEGA BOT VEIKIA!**", parse_mode="Markdown")
+            print("✅ Testinis pranešimas išsiųstas!")
+        except Exception as e:
+            print(f"❌ Testo klaida: {e}")
 
 # === PAGRINDINIS CIKLAS ===
 async def main():
     await send_test()
     while True:
         await check_signals()
-        await asyncio.sleep(900)
+        await asyncio.sleep(600)  # Tikrink kas 10 min
 
 if __name__ == "__main__":
     asyncio.run(main())
