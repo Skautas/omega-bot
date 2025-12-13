@@ -24,7 +24,7 @@ ASSETS = [
     "ZEC/USD", "XLM/USD", "DOT/USD", "LINK/USD", "LTC/USD", "BCH/USD", "ICP/USD"
 ]
 
-TIMEFRAME = "5m"  # Greitesnis signalas
+TIMEFRAME = "5m"
 
 # === PAGALBINĖS FUNKCIJOS ===
 def calculate_rsi(close, window=14):
@@ -38,7 +38,6 @@ def calculate_ema(close, window):
     return EMAIndicator(close, window).ema_indicator()
 
 def calculate_volume_profile(ohlcv, levels=50):
-    """Grąžina POC (Point of Control)"""
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     price_range = np.linspace(df["low"].min(), df["high"].max(), levels)
     volume_profile = []
@@ -51,7 +50,6 @@ def calculate_volume_profile(ohlcv, levels=50):
     return (poc[0] + poc[1]) / 2
 
 def detect_liquidity_zones(ohlcv, lookback=50):
-    """Grąžina „liquidity pools“"""
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["body"] = abs(df["close"] - df["open"])
     volume_threshold = df["volume"].quantile(0.8)
@@ -59,7 +57,6 @@ def detect_liquidity_zones(ohlcv, lookback=50):
     return liquidity_pools[["low", "high"]].values
 
 def calculate_sl_tp(current_price, signal_type, poc, bb_low, bb_high, ema26_val):
-    """Grąžina SL ir TP"""
     if signal_type == "BUY":
         sl = max(bb_low, ema26_val * 0.995, poc * 0.99)
         tp = current_price + (current_price - sl) * 1.8
@@ -69,39 +66,6 @@ def calculate_sl_tp(current_price, signal_type, poc, bb_low, bb_high, ema26_val)
     else:
         sl, tp = 0, 0
     return sl, tp
-
-def calculate_confidence(symbol, df):
-    close = df["close"]
-    rsi = calculate_rsi(close)
-    rsi_val = rsi.iloc[-1]
-    current_price = close.iloc[-1]
-    
-    bb = BollingerBands(close)
-    bb_low = bb.bollinger_lband().iloc[-1]
-    bb_high = bb.bollinger_hband().iloc[-1]
-    volume_ratio = df["volume"].iloc[-1] / df["volume"].rolling(20).mean().iloc[-1]
-    
-    score = 0
-    signal_type = None
-
-    if rsi_val < 40:
-        signal_type = "BUY"
-        score += 25
-        if current_price <= bb_low:
-            score += 20
-        if volume_ratio > 1.5:
-            score += 15
-
-    elif rsi_val > 65:
-        signal_type = "SELL"
-        score += 25
-        if current_price >= bb_high:
-            score += 20
-        if volume_ratio > 1.8:
-            score += 15
-
-    confidence = min(score, 100)
-    return signal_type, confidence, rsi_val
 
 # === SIUNTIMAS ===
 async def send_alert(name, signal, price, sl, tp, confidence, rsi_val):
@@ -124,7 +88,7 @@ async def send_alert(name, signal, price, sl, tp, confidence, rsi_val):
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
-# === TIKRINIMAS ===
+# === PAGRINDINIS CIKLAS ===
 async def check_signals():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for symbol in ASSETS:
@@ -142,28 +106,38 @@ async def check_signals():
             bb_low = bb.bollinger_lband().iloc[-1]
             bb_high = bb.bollinger_hband().iloc[-1]
             
-            signal, confidence, rsi_val = calculate_confidence(symbol, df)
-            current_price = close.iloc[-1]
-            asset_name = symbol.split("/")[0]
-            ema26_val = calculate_ema(close, 26).iloc[-1]
+            # Signalas
+            rsi = calculate_rsi(close)
+            rsi_val = rsi.iloc[-1]
+            volume_ratio = df["volume"].iloc[-1] / df["volume"].rolling(20).mean().iloc[-1]
             
-            # Volume Profile ir Liquidity
-            poc = calculate_volume_profile(ohlcv, 50)
-            liquidity_pools = detect_liquidity_zones(ohlcv, 50)
+            signal_type = None
+            score = 0
             
-            # Patikrinimai
-            near_bb = False
-            if signal == "BUY":
-                near_bb = current_price <= bb_low
-            elif signal == "SELL":
-                near_bb = current_price >= bb_high
-                
-            near_poc = abs(current_price - poc) / poc <= 0.005
-            near_liquidity = any(abs(current_price - lvl) / lvl <= 0.005 for lvl in liquidity_pools.flatten())
+            if rsi_val < 40:
+                signal_type = "BUY"
+                score += 25
+                if close.iloc[-1] <= bb_low:
+                    score += 20
+                if volume_ratio > 1.5:
+                    score += 15
+            elif rsi_val > 65:
+                signal_type = "SELL"
+                score += 25
+                if close.iloc[-1] >= bb_high:
+                    score += 20
+                if volume_ratio > 1.8:
+                    score += 15
             
-            if signal and confidence >= 60 and (near_bb or near_poc or near_liquidity):
-                sl, tp = calculate_sl_tp(current_price, signal, poc, bb_low, bb_high, ema26_val)
-                await send_alert(asset_name, signal, current_price, sl, tp, confidence, rsi_val)
+            confidence = min(score, 100)
+            
+            if signal_type and confidence >= 60:
+                current_price = close.iloc[-1]
+                asset_name = symbol.split("/")[0]
+                ema26_val = calculate_ema(close, 26).iloc[-1]
+                poc = calculate_volume_profile(ohlcv, 50)
+                sl, tp = calculate_sl_tp(current_price, signal_type, poc, bb_low, bb_high, ema26_val)
+                await send_alert(asset_name, signal_type, current_price, sl, tp, confidence, rsi_val)
                 
         except Exception as e:
             print(f"Klaida {symbol}: {e}")
@@ -189,12 +163,12 @@ async def send_test():
         except Exception as e:
             print(f"❌ Testo klaida: {e}")
 
-# === PAGRINDINIS CIKLAS ===
+# === PAGRINDINIS PALEIDIMAS ===
 async def main():
     await send_test()
     while True:
         await check_signals()
-        await asyncio.sleep(300)  # Kas 5 min
+        await asyncio.sleep(300)
 
 if __name__ == "__main__":
     asyncio.run(main())
