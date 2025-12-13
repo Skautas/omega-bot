@@ -137,22 +137,32 @@ async def check_signals():
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             close = df["close"]
             
+            # Bollinger Bands
+            bb = BollingerBands(close)
+            bb_low = bb.bollinger_lband().iloc[-1]
+            bb_high = bb.bollinger_hband().iloc[-1]
+            
             signal, confidence, rsi_val = calculate_confidence(symbol, df)
             current_price = close.iloc[-1]
             asset_name = symbol.split("/")[0]
             ema26_val = calculate_ema(close, 26).iloc[-1]
             
-            # Apskaičiuojame POC ir Liquidity Zones
+            # Volume Profile ir Liquidity
             poc = calculate_volume_profile(ohlcv, 50)
             liquidity_pools = detect_liquidity_zones(ohlcv, 50)
             
-            # Patikriname, ar kaina artima POC arba Liquidity Zone
+            # Patikrinimai
+            near_bb = False
+            if signal == "BUY":
+                near_bb = current_price <= bb_low
+            elif signal == "SELL":
+                near_bb = current_price >= bb_high
+                
             near_poc = abs(current_price - poc) / poc <= 0.005
             near_liquidity = any(abs(current_price - lvl) / lvl <= 0.005 for lvl in liquidity_pools.flatten())
             
-            # Jei signalas ir patvirtinimas
-            if signal and confidence >= 60 and (near_poc or near_liquidity):
-                sl, tp = calculate_sl_tp(current_price, signal, poc, bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1], ema26_val)
+            if signal and confidence >= 60 and (near_bb or near_poc or near_liquidity):
+                sl, tp = calculate_sl_tp(current_price, signal, poc, bb_low, bb_high, ema26_val)
                 await send_alert(asset_name, signal, current_price, sl, tp, confidence, rsi_val)
                 
         except Exception as e:
