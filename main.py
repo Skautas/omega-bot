@@ -88,7 +88,7 @@ async def send_alert(name, signal, price, sl, tp, confidence, rsi_val):
         except Exception as e:
             print(f"❌ Telegram klaida: {e}")
 
-# === PAGRINDINIS CIKLAS ===
+# === TIKRINIMAS ===
 async def check_signals():
     print(f"\n🕒 Tikrinama: {pd.Timestamp.now()}")
     for symbol in ASSETS:
