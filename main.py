@@ -106,6 +106,11 @@ async def check_signals():
             bb_low = bb.bollinger_lband().iloc[-1]
             bb_high = bb.bollinger_hband().iloc[-1]
             
+            # EMA Trend Filter
+            ema9 = calculate_ema(close, 9)
+            ema26 = calculate_ema(close, 26)
+            trend = "BULLISH" if ema9.iloc[-1] > ema26.iloc[-1] else "BEARISH"
+            
             # Signalas
             rsi = calculate_rsi(close)
             rsi_val = rsi.iloc[-1]
@@ -114,14 +119,14 @@ async def check_signals():
             signal_type = None
             score = 0
             
-            if rsi_val < 40:
+            if rsi_val < 40 and trend == "BULLISH":
                 signal_type = "BUY"
                 score += 25
                 if close.iloc[-1] <= bb_low:
                     score += 20
                 if volume_ratio > 1.5:
                     score += 15
-            elif rsi_val > 65:
+            elif rsi_val > 65 and trend == "BEARISH":
                 signal_type = "SELL"
                 score += 25
                 if close.iloc[-1] >= bb_high:
@@ -134,7 +139,7 @@ async def check_signals():
             if signal_type and confidence >= 60:
                 current_price = close.iloc[-1]
                 asset_name = symbol.split("/")[0]
-                ema26_val = calculate_ema(close, 26).iloc[-1]
+                ema26_val = ema26.iloc[-1]
                 poc = calculate_volume_profile(ohlcv, 50)
                 sl, tp = calculate_sl_tp(current_price, signal_type, poc, bb_low, bb_high, ema26_val)
                 await send_alert(asset_name, signal_type, current_price, sl, tp, confidence, rsi_val)
