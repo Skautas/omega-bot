@@ -134,7 +134,7 @@ async def check_signals():
                 if volume_ratio > 1.8:
                     score += 15
             
-            confidence = min(score / 100.0, 1.0)  # ✅ Tikimybė 0.0–1.0
+            confidence = min(score / 100.0, 1.0)  # Tikimybė 0.0–1.0
             
             if signal_type and confidence >= 0.6:  # 60%
                 current_price = close.iloc[-1]
