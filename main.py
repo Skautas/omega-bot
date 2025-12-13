@@ -81,7 +81,7 @@ async def send_alert(name, signal, price, sl, tp, confidence, rsi_val):
                 f"💰 Įėjimas: {price:.4f} USD\n"
                 f"🎯 TP: {tp:.4f} USD\n"
                 f"🛑 SL: {sl:.4f} USD\n"
-                f"📊 RR: {rr:.1f} | Tikimybė: {confidence:.1%}"
+                f"📊 RR: {rr:.1f} | Tikimybė: {confidence * 100:.1f}%"
             )
             await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
             print(f"✅ Signalas: {name} {signal} @ {price:.4f}")
@@ -134,9 +134,9 @@ async def check_signals():
                 if volume_ratio > 1.8:
                     score += 15
             
-            confidence = min(score, 100)
+            confidence = min(score / 100.0, 1.0)  # ✅ Tikimybė 0.0–1.0
             
-            if signal_type and confidence >= 60:
+            if signal_type and confidence >= 0.6:  # 60%
                 current_price = close.iloc[-1]
                 asset_name = symbol.split("/")[0]
                 ema26_val = ema26.iloc[-1]
